@@ -11,9 +11,11 @@ import (
 	"math"
 	"os"
 	"os/exec"
+	"os/signal"
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -102,7 +104,11 @@ func main() {
 			// BlockIO: "0B / 4.1MB"
 			out.BlkReadBytes, out.BlkWriteBytes = parseTwoSizes(raw.BlockIO)
 
-			b, _ := json.Marshal(out)
+			b, err := json.Marshal(out)
+			if err != nil {
+				log.Printf("json marshal error: %v; container=%s", err, raw.Name)
+				continue
+			}
 			fmt.Println(string(b))
 		}
 	}
@@ -116,8 +122,19 @@ func main() {
 	run()
 	t := time.NewTicker(*interval)
 	defer t.Stop()
-	for range t.C {
-		run()
+
+	// Setup graceful shutdown
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
+	for {
+		select {
+		case <-t.C:
+			run()
+		case sig := <-sigCh:
+			log.Printf("received signal %v, shutting down gracefully", sig)
+			return
+		}
 	}
 }
 
@@ -232,7 +249,7 @@ func parseSizeBytes(s string) uint64 {
 
 	mult := unitMultiplier(unit)
 	bytes := val * mult
-	if bytes < 0 || math.IsNaN(bytes) || math.IsInf(bytes, 0) {
+	if bytes < 0 || math.IsNaN(bytes) || math.IsInf(bytes, 0) || bytes > float64(math.MaxUint64) {
 		return 0
 	}
 	return uint64(bytes + 0.5) // round
