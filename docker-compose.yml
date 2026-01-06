@@ -4,5 +4,7 @@ services:
     container_name: docker-stats-agent
     restart: unless-stopped
     command: ["-interval=10s"]
+    environment:
+      HOST_LABEL: ${HOST_LABEL:-${HOSTNAME}}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
