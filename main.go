@@ -54,25 +54,45 @@ func main() {
 	var (
 		interval = flag.Duration("interval", 10*time.Second, "Polling interval, e.g. 5s, 10s")
 		once     = flag.Bool("once", false, "Run once and exit")
-		host     = flag.String("host", "", "Host label (default: hostname)")
+		host     = flag.String("host", "", "Host label (default: $HOST_LABEL or hostname)")
 		timeout  = flag.Duration("timeout", 8*time.Second, "Timeout for docker stats command")
 		docker   = flag.String("docker", "docker", "Path to docker binary")
 	)
 	flag.Parse()
 
-	h := *host
+	h := strings.TrimSpace(*host)
 	if h == "" {
-		hn, err := os.Hostname()
-		if err != nil {
-			h = "unknown-host"
-		} else {
+		if envHost := strings.TrimSpace(os.Getenv("HOST_LABEL")); envHost != "" {
+			h = envHost
+		} else if hn, err := os.Hostname(); err == nil && hn != "" {
 			h = hn
+		} else {
+			h = "unknown-host"
 		}
 	}
 
-	run := func() {
-		lines, err := getDockerStatsJSONLines(context.Background(), *docker, *timeout)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Stop(sigCh)
+
+	go func() {
+		select {
+		case sig := <-sigCh:
+			log.Printf("received signal %v, shutting down gracefully", sig)
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+
+	run := func(ctx context.Context) {
+		lines, err := getDockerStatsJSONLines(ctx, *docker, *timeout)
 		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
 			log.Printf("docker stats error: %v", err)
 			return
 		}
@@ -114,26 +134,21 @@ func main() {
 	}
 
 	if *once {
-		run()
+		run(ctx)
 		return
 	}
 
 	// run immediately, then on ticker
-	run()
+	run(ctx)
 	t := time.NewTicker(*interval)
 	defer t.Stop()
 
-	// Setup graceful shutdown
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-
 	for {
 		select {
-		case <-t.C:
-			run()
-		case sig := <-sigCh:
-			log.Printf("received signal %v, shutting down gracefully", sig)
+		case <-ctx.Done():
 			return
+		case <-t.C:
+			run(ctx)
 		}
 	}
 }
@@ -194,6 +209,7 @@ func parseUint(s string) uint64 {
 }
 
 func parsePercent(s string) float64 {
+	s = strings.TrimSpace(s)
 	s = strings.TrimSpace(strings.TrimSuffix(s, "%"))
 	if s == "" {
 		return 0
