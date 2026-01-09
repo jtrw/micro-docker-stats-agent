@@ -36,6 +36,7 @@ type RawDockerStat struct {
 // MetricLine is what we output to logs (clean, numeric-friendly).
 type MetricLine struct {
 	TS            time.Time `json:"ts"`
+	BatchID       string    `json:"batch_id"`
 	Host          string    `json:"host"`
 	ContainerID   string    `json:"container_id"`
 	ContainerName string    `json:"container"`
@@ -98,6 +99,9 @@ func main() {
 		}
 
 		now := time.Now().UTC()
+
+		batchID := now.Format("20060102-150405.000")
+
 		for _, ln := range lines {
 			var raw RawDockerStat
 			if err := json.Unmarshal([]byte(ln), &raw); err != nil {
@@ -107,6 +111,7 @@ func main() {
 
 			out := MetricLine{
 				TS:            now,
+				BatchID:       batchID,
 				Host:          h,
 				ContainerID:   raw.ID,
 				ContainerName: raw.Name,
